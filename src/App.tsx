@@ -78,9 +78,10 @@ function App() {
     };
   }, [resetInactivityTimer]);
 
+  // Reset forzato all'apertura dell'app - ogni sessione parte pulita
   useEffect(() => {
-    loadClients();
-    loadSettings();
+    clearDatabase();
+    // Gli stati sono già inizializzati vuoti, non serve fare altro
   }, []);
 
   const loadClients = () => {
