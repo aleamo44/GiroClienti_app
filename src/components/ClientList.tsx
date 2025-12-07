@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Plus, Trash2, Save, X, Search } from 'lucide-react';
+import { Plus, Trash2, Save, X, Search, List } from 'lucide-react';
 import { Client } from '../lib/types';
-import { searchClients } from '../lib/storage';
+import { searchClients, getClients } from '../lib/storage';
 import { geocodeAddress } from '../lib/geocoding';
 
 interface ClientListProps {
@@ -14,6 +14,8 @@ interface ClientListProps {
 export default function ClientList({ clients, onClientsChange, selectedClientsForRoute, onSelectedClientsChange }: ClientListProps) {
   const [isAdding, setIsAdding] = useState(false);
   const [useSearch, setUseSearch] = useState(false);
+  const [showAllClients, setShowAllClients] = useState(false);
+  const [allDbClients, setAllDbClients] = useState<Client[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Client[]>([]);
   const [formData, setFormData] = useState({
@@ -52,9 +54,26 @@ export default function ClientList({ clients, onClientsChange, selectedClientsFo
   const cancelAdd = () => {
     setIsAdding(false);
     setUseSearch(false);
+    setShowAllClients(false);
     setSearchQuery('');
     setSearchResults([]);
     setFormData({ first_name: '', last_name: '', address: '' });
+  };
+
+  const handleShowAllClients = () => {
+    const allClients = getClients();
+    // Filtra i clienti già selezionati per il giro
+    const filtered = allClients.filter(c => !selectedClientsForRoute.some(s => s.id === c.id));
+    setAllDbClients(filtered);
+    setShowAllClients(true);
+    setUseSearch(false);
+    setIsAdding(false);
+  };
+
+  const handleAddFromAllClients = (client: Client) => {
+    onSelectedClientsChange([...selectedClientsForRoute, client]);
+    // Rimuovi dalla lista dei clienti visualizzati
+    setAllDbClients(allDbClients.filter(c => c.id !== client.id));
   };
 
   const handleSearch = (query: string) => {
@@ -114,9 +133,18 @@ export default function ClientList({ clients, onClientsChange, selectedClientsFo
             </button>
           )}
           <button
+            onClick={handleShowAllClients}
+            disabled={isAdding}
+            className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <List size={20} />
+            <span className="hidden sm:inline">Tutti</span>
+          </button>
+          <button
             onClick={() => {
               setUseSearch(!useSearch);
               setIsAdding(false);
+              setShowAllClients(false);
             }}
             disabled={isAdding}
             className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
@@ -128,6 +156,7 @@ export default function ClientList({ clients, onClientsChange, selectedClientsFo
             onClick={() => {
               setIsAdding(true);
               setUseSearch(false);
+              setShowAllClients(false);
             }}
             disabled={isAdding}
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
@@ -138,10 +167,56 @@ export default function ClientList({ clients, onClientsChange, selectedClientsFo
         </div>
       </div>
 
+      {/* Sezione mostra tutti i clienti del database */}
+      {showAllClients && (
+        <div className="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-lg">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-medium text-gray-900">
+              Tutti i Clienti nel Database
+              <span className="ml-2 text-sm font-normal text-purple-600">
+                ({allDbClients.length} disponibili)
+              </span>
+            </h3>
+            <button
+              onClick={() => setShowAllClients(false)}
+              className="p-1 hover:bg-purple-100 rounded transition-colors"
+            >
+              <X size={18} className="text-gray-600" />
+            </button>
+          </div>
+          {allDbClients.length > 0 ? (
+            <div className="border border-gray-200 rounded-lg max-h-64 overflow-y-auto">
+              {allDbClients.map((client) => (
+                <button
+                  key={client.id}
+                  onClick={() => handleAddFromAllClients(client)}
+                  className="w-full text-left px-4 py-3 hover:bg-purple-100 border-b border-gray-100 last:border-b-0 transition-colors flex items-start justify-between"
+                >
+                  <div>
+                    <p className="font-medium text-gray-900">
+                      {client.first_name} {client.last_name}
+                    </p>
+                    <p className="text-sm text-gray-600">{client.address}</p>
+                  </div>
+                  <Plus size={18} className="text-purple-600 flex-shrink-0 mt-1" />
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500">
+              Nessun cliente disponibile nel database (tutti già aggiunti al giro o database vuoto)
+            </p>
+          )}
+          <p className="text-xs text-gray-600 mt-2">
+            Clicca su un cliente per aggiungerlo al giro
+          </p>
+        </div>
+      )}
+
       {useSearch && (
         <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="font-medium text-gray-900">Cerca Clienti</h3>
+            <h3 className="font-medium text-gray-900">Cerca Clienti nel Database</h3>
             <button
               onClick={() => {
                 setUseSearch(false);
@@ -157,7 +232,7 @@ export default function ClientList({ clients, onClientsChange, selectedClientsFo
             <Search size={18} className="absolute left-3 top-3 text-gray-400" />
             <input
               type="text"
-              placeholder="Cerca clienti..."
+              placeholder="Cerca per nome, cognome o indirizzo..."
               value={searchQuery}
               onChange={(e) => handleSearch(e.target.value)}
               className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
@@ -186,7 +261,7 @@ export default function ClientList({ clients, onClientsChange, selectedClientsFo
             <p className="text-sm text-gray-500 mt-2">Nessun cliente trovato</p>
           )}
           <p className="text-xs text-gray-600 mt-2">
-            Digita il nome, cognome o indirizzo per cercare clienti salvati
+            Digita almeno 2 caratteri per cercare (ricerca parziale su nome, cognome, indirizzo)
           </p>
         </div>
       )}
