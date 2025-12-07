@@ -5,12 +5,13 @@ import RouteMap from './components/RouteMap';
 import RouteStops from './components/RouteStops';
 import SettingsModal from './components/SettingsModal';
 import ExportOptions from './components/ExportOptions';
-import { getClients, getSettings } from './lib/storage';
+import { getClients, getSettings, saveSettings } from './lib/storage';
 import { optimizeRoute } from './lib/routeOptimizer';
 import { Client, Settings as SettingsType, OptimizedRoute } from './lib/types';
 
 function App() {
   const [clients, setClients] = useState<Client[]>([]);
+  const [selectedClientsForRoute, setSelectedClientsForRoute] = useState<Client[]>([]);
   const [settings, setSettings] = useState<SettingsType | null>(null);
   const [route, setRoute] = useState<OptimizedRoute | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -32,7 +33,9 @@ function App() {
   };
 
   const handleGenerateRoute = async () => {
-    const validClients = clients.filter(
+    // Usa selectedClientsForRoute se disponibile, altrimenti tutti i clienti
+    const clientsToUse = selectedClientsForRoute.length > 0 ? selectedClientsForRoute : clients;
+    const validClients = clientsToUse.filter(
       (c) => c.latitude !== null && c.longitude !== null
     );
 
@@ -147,9 +150,25 @@ function App() {
               startAddress={settings?.home_address || ''}
               clients={clients}
               settings={settings}
+              selectedClientsForRoute={selectedClientsForRoute}
               onDataImported={() => {
                 loadClients();
                 loadSettings();
+              }}
+              onItineraryImported={(importedClients, homeAddress) => {
+                // Imposta i clienti selezionati per il giro (non nel database)
+                setSelectedClientsForRoute(importedClients);
+                // Imposta il punto base nelle settings (questo va nel database)
+                if (homeAddress) {
+                  saveSettings({
+                    home_address: homeAddress,
+                    home_latitude: null,
+                    home_longitude: null
+                  });
+                  loadSettings();
+                }
+                // Reset del percorso
+                setRoute(null);
               }}
             />
           </div>

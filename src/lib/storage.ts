@@ -125,3 +125,4 @@ export function clearDatabase(): void {
   localStorage.removeItem(SETTINGS_KEY);
 }
 
+

@@ -1,14 +1,17 @@
 import { useRef } from 'react';
-import { FileText, MapPin, Download, Upload, Database } from 'lucide-react';
+import { FileText, MapPin, Download, Upload } from 'lucide-react';
 import { OptimizedRoute, Client, Settings } from '../lib/types';
-import { importDatabase, DatabaseExport } from '../lib/storage';
+import { importDatabase, DatabaseExport, saveSettings } from '../lib/storage';
+import { geocodeAddress } from '../lib/geocoding';
 
 interface ExportOptionsProps {
   route: OptimizedRoute | null;
   startAddress: string;
   clients: Client[];
   settings: Settings | null;
+  selectedClientsForRoute: Client[];
   onDataImported: () => void;
+  onItineraryImported: (clients: Client[], homeAddress: string | null) => void;
 }
 
 export default function ExportOptions({
@@ -16,9 +19,12 @@ export default function ExportOptions({
   startAddress,
   clients,
   settings,
-  onDataImported
+  selectedClientsForRoute,
+  onDataImported,
+  onItineraryImported
 }: ExportOptionsProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const itineraryFileInputRef = useRef<HTMLInputElement>(null);
 
   const exportToPDF = () => {
     if (!route || route.stops.length === 0) return;
@@ -103,38 +109,30 @@ export default function ExportOptions({
   const exportToCSV = () => {
     if (!route || route.stops.length === 0) return;
 
-    const rows = [
-      ['Ordine', 'Nome', 'Cognome', 'Indirizzo', 'Latitudine', 'Longitudine']
-    ];
-
+    const rows: string[][] = [];
+    
+    // Header
+    rows.push(['TYPE', 'first_name', 'last_name', 'address', 'home_address']);
+    
+    // Settings row (punto base)
     rows.push([
-      '0',
-      'Partenza',
+      'SETTINGS',
       '',
-      startAddress,
-      route.stops[0]?.client.latitude?.toString() || '',
-      route.stops[0]?.client.longitude?.toString() || ''
+      '',
+      '',
+      startAddress
     ]);
-
+    
+    // Client rows (solo clienti del percorso)
     route.stops.forEach((stop) => {
       rows.push([
-        stop.order.toString(),
+        'CLIENT',
         stop.client.first_name,
         stop.client.last_name,
         stop.client.address,
-        stop.client.latitude?.toString() || '',
-        stop.client.longitude?.toString() || ''
+        ''
       ]);
     });
-
-    rows.push([
-      (route.stops.length + 1).toString(),
-      'Ritorno',
-      '',
-      startAddress,
-      '',
-      ''
-    ]);
 
     const csvContent = rows.map((row) => row.map(escapeCSV).join(',')).join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -157,61 +155,99 @@ export default function ExportOptions({
     return field;
   };
 
-  // Export full database as CSV
-  const exportFullDatabase = () => {
-    const rows: string[][] = [];
+  // Import itinerary CSV (non tocca il database, solo imposta clienti selezionati e punto base)
+  const importItineraryCSV = async (file: File) => {
+    const reader = new FileReader();
     
-    // Header
-    rows.push(['TYPE', 'id', 'first_name', 'last_name', 'address', 'latitude', 'longitude', 'home_address', 'home_latitude', 'home_longitude', 'created_at', 'updated_at']);
-    
-    // Settings row
-    if (settings) {
-      rows.push([
-        'SETTINGS',
-        settings.id || '',
-        '',
-        '',
-        '',
-        '',
-        '',
-        settings.home_address || '',
-        settings.home_latitude?.toString() || '',
-        settings.home_longitude?.toString() || '',
-        settings.created_at || '',
-        settings.updated_at || ''
-      ]);
+    reader.onload = async (e) => {
+      try {
+        const content = e.target?.result as string;
+        const rows = parseCSV(content);
+        
+        if (rows.length < 2) {
+          alert('File CSV vuoto o non valido');
+          return;
+        }
+
+        const header = rows[0];
+        const typeIndex = header.indexOf('TYPE');
+        const firstNameIndex = header.indexOf('first_name');
+        const lastNameIndex = header.indexOf('last_name');
+        const addressIndex = header.indexOf('address');
+        const homeAddressIndex = header.indexOf('home_address');
+        
+        if (typeIndex === -1 || firstNameIndex === -1 || lastNameIndex === -1 || addressIndex === -1 || homeAddressIndex === -1) {
+          alert('Formato CSV non valido: colonne mancanti');
+          return;
+        }
+
+        let homeAddress: string | null = null;
+        const importedClients: Client[] = [];
+
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i];
+          if (row.length < 5) continue;
+
+          const type = row[typeIndex];
+
+          if (type === 'SETTINGS') {
+            homeAddress = row[homeAddressIndex] || null;
+          } else if (type === 'CLIENT') {
+            const firstName = row[firstNameIndex] || '';
+            const lastName = row[lastNameIndex] || '';
+            const address = row[addressIndex] || '';
+
+            if (firstName && lastName && address) {
+              // Geocodifica l'indirizzo
+              const coords = await geocodeAddress(address);
+              
+              importedClients.push({
+                id: crypto.randomUUID(),
+                first_name: firstName,
+                last_name: lastName,
+                address: address,
+                latitude: coords?.latitude || null,
+                longitude: coords?.longitude || null
+              });
+            }
+          }
+        }
+
+        if (importedClients.length === 0 && !homeAddress) {
+          alert('Nessun dato valido trovato nel file CSV');
+          return;
+        }
+
+        // Chiama il callback per impostare clienti selezionati e punto base
+        onItineraryImported(importedClients, homeAddress);
+        alert(`Itinerario importato: ${importedClients.length} clienti${homeAddress ? ' e punto base configurato' : ''}`);
+        
+      } catch (error) {
+        console.error('Import itinerary error:', error);
+        alert('Errore durante l\'importazione del file');
+      }
+    };
+
+    reader.onerror = () => {
+      alert('Errore nella lettura del file');
+    };
+
+    reader.readAsText(file);
+  };
+
+  const handleItineraryFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (!file.name.endsWith('.csv')) {
+        alert('Selezionare un file CSV');
+        return;
+      }
+      importItineraryCSV(file);
     }
-    
-    // Client rows
-    clients.forEach((client) => {
-      rows.push([
-        'CLIENT',
-        client.id,
-        client.first_name,
-        client.last_name,
-        client.address,
-        client.latitude?.toString() || '',
-        client.longitude?.toString() || '',
-        '',
-        '',
-        '',
-        client.created_at || '',
-        client.updated_at || ''
-      ]);
-    });
-
-    const csvContent = rows.map((row) => row.map(escapeCSV).join(',')).join('\n');
-    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-
-    const date = new Date().toISOString().split('T')[0];
-    link.setAttribute('href', url);
-    link.setAttribute('download', `planner-clienti-backup-${date}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    // Reset input
+    if (itineraryFileInputRef.current) {
+      itineraryFileInputRef.current.value = '';
+    }
   };
 
   // Parse CSV content
@@ -260,11 +296,11 @@ export default function ExportOptions({
     return rows;
   };
 
-  // Import full database from CSV
-  const importFullDatabase = (file: File) => {
+  // Import full database from CSV (solo campi obbligatori)
+  const importFullDatabase = async (file: File) => {
     const reader = new FileReader();
     
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const content = e.target?.result as string;
         // Remove BOM if present
@@ -277,10 +313,15 @@ export default function ExportOptions({
         }
 
         const header = rows[0];
-        const typeIndex = header.indexOf('TYPE');
+        const firstNameIndex = header.indexOf('first_name');
+        const lastNameIndex = header.indexOf('last_name');
+        const addressIndex = header.indexOf('address');
+        const homeAddressIndex = header.indexOf('home_address');
         
-        if (typeIndex === -1) {
-          alert('Formato CSV non valido: colonna TYPE mancante');
+        // Verifica formato: deve avere almeno first_name, last_name, address per clienti
+        // e home_address per settings (opzionale)
+        if (firstNameIndex === -1 || lastNameIndex === -1 || addressIndex === -1) {
+          alert('Formato CSV non valido: colonne obbligatorie mancanti (first_name, last_name, address)');
           return;
         }
 
@@ -293,35 +334,45 @@ export default function ExportOptions({
 
         for (let i = 1; i < rows.length; i++) {
           const row = rows[i];
-          if (row.length < 2) continue;
+          if (row.length < 3) continue;
 
-          const type = row[typeIndex];
+          const firstName = row[firstNameIndex] || '';
+          const lastName = row[lastNameIndex] || '';
+          const address = row[addressIndex] || '';
+          const homeAddress = homeAddressIndex !== -1 ? (row[homeAddressIndex] || '') : '';
 
-          if (type === 'SETTINGS') {
+          // Se ha home_address, è una riga settings
+          if (homeAddress && !firstName && !lastName) {
+            // Geocodifica l'indirizzo del punto base
+            const coords = await geocodeAddress(homeAddress);
             dbExport.settings = {
-              id: row[1] || crypto.randomUUID(),
-              home_address: row[7] || '',
-              home_latitude: row[8] ? parseFloat(row[8]) : null,
-              home_longitude: row[9] ? parseFloat(row[9]) : null,
-              created_at: row[10] || new Date().toISOString(),
-              updated_at: row[11] || new Date().toISOString()
+              id: crypto.randomUUID(),
+              home_address: homeAddress,
+              home_latitude: coords?.latitude || null,
+              home_longitude: coords?.longitude || null,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
             };
-          } else if (type === 'CLIENT') {
+          } 
+          // Altrimenti è un cliente (se ha tutti i campi obbligatori)
+          else if (firstName && lastName && address) {
+            // Geocodifica l'indirizzo
+            const coords = await geocodeAddress(address);
             dbExport.clients.push({
-              id: row[1] || crypto.randomUUID(),
-              first_name: row[2] || '',
-              last_name: row[3] || '',
-              address: row[4] || '',
-              latitude: row[5] ? parseFloat(row[5]) : null,
-              longitude: row[6] ? parseFloat(row[6]) : null,
-              created_at: row[10] || new Date().toISOString(),
-              updated_at: row[11] || new Date().toISOString()
+              id: crypto.randomUUID(),
+              first_name: firstName,
+              last_name: lastName,
+              address: address,
+              latitude: coords?.latitude || null,
+              longitude: coords?.longitude || null,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
             });
           }
         }
 
         if (dbExport.clients.length === 0 && !dbExport.settings) {
-          alert('Nessun dato trovato nel file CSV');
+          alert('Nessun dato valido trovato nel file CSV');
           return;
         }
 
@@ -406,25 +457,37 @@ export default function ExportOptions({
         </p>
       )}
 
-      <hr className="border-gray-200 mb-4" />
+      {/* Importazione Itinerario */}
+      <div className="mt-6 pt-6 border-t border-gray-200">
+        <h3 className="text-sm font-medium text-gray-700 mb-3">
+          Importa Itinerario
+        </h3>
+        <p className="text-xs text-gray-600 mb-3">
+          Carica un CSV dell'itinerario per riprendere una pianificazione
+        </p>
+        <label className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 cursor-pointer transition-colors text-sm">
+          <Upload size={18} />
+          <span>Carica Itinerario CSV</span>
+          <input
+            ref={itineraryFileInputRef}
+            type="file"
+            accept=".csv"
+            onChange={handleItineraryFileSelect}
+            className="hidden"
+          />
+        </label>
+      </div>
+
+      <hr className="border-gray-200 my-6" />
 
       <h3 className="text-lg font-semibold text-gray-800 mb-3">
         Gestione Database
       </h3>
       <p className="text-sm text-gray-600 mb-4">
-        Salva e ripristina tutti i tuoi dati (clienti e impostazioni)
+        Carica il tuo database di clienti (solo campi obbligatori: nome, cognome, indirizzo)
       </p>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <button
-          onClick={exportFullDatabase}
-          disabled={clients.length === 0 && !settings}
-          className="flex items-center justify-center gap-2 px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        >
-          <Database size={20} />
-          <span>Scarica Database</span>
-        </button>
-
+      <div className="grid grid-cols-1 gap-3">
         <label className="flex items-center justify-center gap-2 px-4 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 cursor-pointer transition-colors">
           <Upload size={20} />
           <span>Carica Database</span>
@@ -439,7 +502,7 @@ export default function ExportOptions({
       </div>
 
       <p className="text-xs text-gray-500 text-center mt-3">
-        Il file CSV di backup contiene tutti i clienti e le impostazioni
+        Il file CSV deve contenere solo: first_name, last_name, address (per clienti) e home_address (per settings, opzionale)
       </p>
     </div>
   );
