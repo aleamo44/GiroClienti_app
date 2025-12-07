@@ -1,13 +1,15 @@
-import { useState, useEffect } from 'react';
-import { Settings, MapPin, Route as RouteIcon, Home } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Settings, MapPin, Route as RouteIcon, Home, RotateCcw } from 'lucide-react';
 import ClientList from './components/ClientList';
 import RouteMap from './components/RouteMap';
 import RouteStops from './components/RouteStops';
 import SettingsModal from './components/SettingsModal';
 import ExportOptions from './components/ExportOptions';
-import { getClients, getSettings, saveSettings } from './lib/storage';
+import { getClients, getSettings, saveSettings, clearDatabase } from './lib/storage';
 import { optimizeRoute } from './lib/routeOptimizer';
 import { Client, Settings as SettingsType, OptimizedRoute } from './lib/types';
+
+const INACTIVITY_TIMEOUT = 30 * 60 * 1000; // 30 minuti in millisecondi
 
 function App() {
   const [clients, setClients] = useState<Client[]>([]);
@@ -16,6 +18,65 @@ function App() {
   const [route, setRoute] = useState<OptimizedRoute | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const inactivityTimerRef = useRef<number | null>(null);
+
+  // Funzione per resettare tutti i dati
+  const handleReset = useCallback((showConfirm: boolean = true) => {
+    if (showConfirm && !confirm('Vuoi cancellare tutti i dati?\n\nQuesta azione rimuoverà:\n- Database clienti\n- Impostazioni punto base\n- Clienti selezionati per il giro\n- Percorso generato')) {
+      return;
+    }
+    
+    // Cancella localStorage (database e settings)
+    clearDatabase();
+    
+    // Resetta tutti gli stati
+    setClients([]);
+    setSelectedClientsForRoute([]);
+    setSettings(null);
+    setRoute(null);
+    
+    if (showConfirm) {
+      alert('Tutti i dati sono stati cancellati.');
+    }
+  }, []);
+
+  // Resetta il timer di inattività
+  const resetInactivityTimer = useCallback(() => {
+    if (inactivityTimerRef.current) {
+      clearTimeout(inactivityTimerRef.current);
+    }
+    inactivityTimerRef.current = window.setTimeout(() => {
+      handleReset(false); // Reset automatico senza conferma
+      alert('Sessione scaduta per inattività. Tutti i dati sono stati cancellati.');
+    }, INACTIVITY_TIMEOUT);
+  }, [handleReset]);
+
+  // Setup del timer di inattività
+  useEffect(() => {
+    const events = ['mousedown', 'mousemove', 'keydown', 'scroll', 'touchstart', 'click'];
+    
+    const handleActivity = () => {
+      resetInactivityTimer();
+    };
+
+    // Aggiungi event listeners
+    events.forEach(event => {
+      document.addEventListener(event, handleActivity);
+    });
+
+    // Avvia il timer iniziale
+    resetInactivityTimer();
+
+    // Cleanup
+    return () => {
+      events.forEach(event => {
+        document.removeEventListener(event, handleActivity);
+      });
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+      }
+    };
+  }, [resetInactivityTimer]);
 
   useEffect(() => {
     loadClients();
@@ -96,13 +157,23 @@ function App() {
                 </p>
               </div>
             </div>
-            <button
-              onClick={() => setIsSettingsOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
-            >
-              <Settings size={20} />
-              <span className="hidden sm:inline">Imposta Base</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsSettingsOpen(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+              >
+                <Settings size={20} />
+                <span className="hidden sm:inline">Imposta Base</span>
+              </button>
+              <button
+                onClick={() => handleReset(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors"
+                title="Cancella tutti i dati e resetta la sessione"
+              >
+                <RotateCcw size={20} />
+                <span className="hidden sm:inline">Reset</span>
+              </button>
+            </div>
           </div>
         </div>
       </header>
