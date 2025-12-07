@@ -1,17 +1,18 @@
 import { useState } from 'react';
-import { Plus, Trash2, Edit2, Save, X, Search } from 'lucide-react';
+import { Plus, Trash2, Save, X, Search } from 'lucide-react';
 import { Client } from '../lib/types';
-import { addClient, updateClient, deleteClient, searchClients, getClients } from '../lib/storage';
+import { searchClients } from '../lib/storage';
 import { geocodeAddress } from '../lib/geocoding';
 
 interface ClientListProps {
   clients: Client[];
   onClientsChange: () => void;
+  selectedClientsForRoute: Client[];
+  onSelectedClientsChange: (clients: Client[]) => void;
 }
 
-export default function ClientList({ clients, onClientsChange }: ClientListProps) {
+export default function ClientList({ clients, onClientsChange, selectedClientsForRoute, onSelectedClientsChange }: ClientListProps) {
   const [isAdding, setIsAdding] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
   const [useSearch, setUseSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Client[]>([]);
@@ -31,60 +32,24 @@ export default function ClientList({ clients, onClientsChange }: ClientListProps
     setLoading(true);
     const coords = await geocodeAddress(formData.address);
 
-    addClient({
+    // Aggiungi SOLO ai clienti selezionati per il giro (NON al database)
+    const newClient: Client = {
+      id: crypto.randomUUID(),
       first_name: formData.first_name,
       last_name: formData.last_name,
       address: formData.address,
       latitude: coords?.latitude || null,
       longitude: coords?.longitude || null
-    });
+    };
+
+    onSelectedClientsChange([...selectedClientsForRoute, newClient]);
 
     setLoading(false);
     setFormData({ first_name: '', last_name: '', address: '' });
     setIsAdding(false);
-    onClientsChange();
   };
 
-  const handleEdit = async (id: string) => {
-    if (!formData.first_name || !formData.last_name || !formData.address) {
-      alert('Compilare tutti i campi');
-      return;
-    }
-
-    setLoading(true);
-    const coords = await geocodeAddress(formData.address);
-
-    updateClient(id, {
-      first_name: formData.first_name,
-      last_name: formData.last_name,
-      address: formData.address,
-      latitude: coords?.latitude || null,
-      longitude: coords?.longitude || null
-    });
-
-    setLoading(false);
-    setEditingId(null);
-    setFormData({ first_name: '', last_name: '', address: '' });
-    onClientsChange();
-  };
-
-  const handleDelete = (id: string) => {
-    if (!confirm('Eliminare questo cliente?')) return;
-    deleteClient(id);
-    onClientsChange();
-  };
-
-  const startEdit = (client: Client) => {
-    setEditingId(client.id);
-    setFormData({
-      first_name: client.first_name,
-      last_name: client.last_name,
-      address: client.address
-    });
-  };
-
-  const cancelEdit = () => {
-    setEditingId(null);
+  const cancelAdd = () => {
     setIsAdding(false);
     setUseSearch(false);
     setSearchQuery('');
@@ -99,34 +64,61 @@ export default function ClientList({ clients, onClientsChange }: ClientListProps
       return;
     }
     const results = searchClients(query);
-    // Filter out clients already in the current list
-    const filtered = results.filter(r => !clients.some(c => c.id === r.id));
+    // Filter out clients already in the selected list for route
+    const filtered = results.filter(r => !selectedClientsForRoute.some(c => c.id === r.id));
     setSearchResults(filtered);
   };
 
   const handleAddFromSearch = (client: Client) => {
-    const isAlreadyAdded = clients.some((c) => c.id === client.id);
+    const isAlreadyAdded = selectedClientsForRoute.some((c) => c.id === client.id);
     if (isAlreadyAdded) {
       alert('Questo cliente è già nella lista');
       return;
     }
+    // Aggiungi il cliente ai clienti selezionati per il giro
+    onSelectedClientsChange([...selectedClientsForRoute, client]);
     setUseSearch(false);
     setSearchQuery('');
     setSearchResults([]);
-    onClientsChange();
+  };
+
+  const handleRemoveFromRoute = (clientId: string) => {
+    onSelectedClientsChange(selectedClientsForRoute.filter(c => c.id !== clientId));
+  };
+
+  const handleClearRouteClients = () => {
+    if (confirm('Vuoi rimuovere tutti i clienti dal giro?')) {
+      onSelectedClientsChange([]);
+    }
   };
 
   return (
     <div className="bg-white rounded-lg shadow-sm p-6">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold text-gray-800">Clienti</h2>
+        <h2 className="text-xl font-semibold text-gray-800">
+          Clienti per il Giro
+          {selectedClientsForRoute.length > 0 && (
+            <span className="ml-2 text-sm font-normal text-blue-600">
+              ({selectedClientsForRoute.length} selezionati)
+            </span>
+          )}
+        </h2>
         <div className="flex gap-2">
+          {selectedClientsForRoute.length > 0 && (
+            <button
+              onClick={handleClearRouteClients}
+              className="flex items-center gap-2 px-3 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors text-sm"
+            >
+              <X size={16} />
+              <span className="hidden sm:inline">Svuota</span>
+            </button>
+          )}
           <button
             onClick={() => {
               setUseSearch(!useSearch);
               setIsAdding(false);
             }}
-            disabled={isAdding || editingId !== null}
+            disabled={isAdding}
             className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             <Search size={20} />
@@ -137,7 +129,7 @@ export default function ClientList({ clients, onClientsChange }: ClientListProps
               setIsAdding(true);
               setUseSearch(false);
             }}
-            disabled={isAdding || editingId !== null}
+            disabled={isAdding}
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             <Plus size={20} />
@@ -235,7 +227,7 @@ export default function ClientList({ clients, onClientsChange }: ClientListProps
                 {loading ? 'Salvataggio...' : 'Salva'}
               </button>
               <button
-                onClick={cancelEdit}
+                onClick={cancelAdd}
                 disabled={loading}
                 className="flex items-center gap-2 px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 disabled:opacity-50 transition-colors"
               >
@@ -246,84 +238,33 @@ export default function ClientList({ clients, onClientsChange }: ClientListProps
           </div>
         )}
 
-        {clients.map((client) => (
-          <div key={client.id} className="border border-gray-200 rounded-lg p-4 hover:border-gray-300 transition-colors">
-            {editingId === client.id ? (
-              <>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-                  <input
-                    type="text"
-                    value={formData.first_name}
-                    onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
-                    className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                  <input
-                    type="text"
-                    value={formData.last_name}
-                    onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
-                    className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                  <input
-                    type="text"
-                    value={formData.address}
-                    onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                    className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent md:col-span-3"
-                  />
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleEdit(client.id)}
-                    disabled={loading}
-                    className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
-                  >
-                    <Save size={18} />
-                    {loading ? 'Salvataggio...' : 'Salva'}
-                  </button>
-                  <button
-                    onClick={cancelEdit}
-                    disabled={loading}
-                    className="flex items-center gap-2 px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 disabled:opacity-50 transition-colors"
-                  >
-                    <X size={18} />
-                    Annulla
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="font-medium text-gray-900">
-                    {client.first_name} {client.last_name}
-                  </h3>
-                  <p className="text-sm text-gray-600">{client.address}</p>
-                  {client.latitude && client.longitude && (
-                    <p className="text-xs text-green-600 mt-1">Geocodificato</p>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => startEdit(client)}
-                    disabled={isAdding || editingId !== null}
-                    className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    <Edit2 size={18} />
-                  </button>
-                  <button
-                    onClick={() => handleDelete(client.id)}
-                    disabled={isAdding || editingId !== null}
-                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    <Trash2 size={18} />
-                  </button>
-                </div>
+        {/* Mostra i clienti selezionati per il giro */}
+        {selectedClientsForRoute.map((client) => (
+          <div key={client.id} className="border border-blue-200 rounded-lg p-4 bg-blue-50 hover:border-blue-300 transition-colors">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-medium text-gray-900">
+                  {client.first_name} {client.last_name}
+                </h3>
+                <p className="text-sm text-gray-600">{client.address}</p>
+                {client.latitude && client.longitude && (
+                  <p className="text-xs text-green-600 mt-1">Geocodificato</p>
+                )}
               </div>
-            )}
+              <button
+                onClick={() => handleRemoveFromRoute(client.id)}
+                className="p-2 text-red-600 hover:bg-red-100 rounded-lg transition-colors"
+                title="Rimuovi dal giro"
+              >
+                <Trash2 size={18} />
+              </button>
+            </div>
           </div>
         ))}
 
-        {clients.length === 0 && !isAdding && (
+        {selectedClientsForRoute.length === 0 && !isAdding && (
           <p className="text-center text-gray-500 py-8">
-            Nessun cliente. Aggiungi il primo cliente per iniziare.
+            Nessun cliente selezionato per il giro. Usa "Cerca" per aggiungere clienti dal database.
           </p>
         )}
       </div>
